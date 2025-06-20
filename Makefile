@@ -27,6 +27,19 @@ ifeq ($(OS),darwin)
   export HOMEBREW_NO_ENV_HINTS=1
 endif
 
+  # detect host architecture and map to our target suffixes
+UNAME_M := $(shell uname -m)
+ifeq ($(UNAME_M),x86_64)
+  ARCH := x64
+else ifeq ($(UNAME_M),amd64)
+  ARCH := x64
+else ifeq ($(UNAME_M),arm64)
+  ARCH := arm64
+else ifeq ($(UNAME_M),aarch64)
+  ARCH := arm64
+else
+  $(error Unsupported architecture: $(UNAME_M))
+endif
 
 ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
@@ -169,33 +182,6 @@ ubuntu-arm64: setup-zig   # ensures Zig & cargo-zigbuild exist
 	    sha256sum $(PROJECT_NAME)-linux-arm64.tgz >> CHECKSUM-linux-arm64.txt
 
 	$(MAKE) list-archives
-
-# ──────────────────────────────────────────────────────────────────────────
-# act-linux – run just the two Linux matrix rows locally
-# ──────────────────────────────────────────────────────────────────────────
-.PHONY: act-linux
-act-linux:
-	@command -v act >/dev/null 2>&1 || { echo "act missing"; exit 1; }
-
-	# allow x86-64 hosts to execute arm64 containers
-	@docker run --rm --privileged tonistiigi/binfmt --install all >/dev/null 2>&1 || true
-
-	@IMG=catthehacker/ubuntu:act-24.04 ; \
-	for cfg in \
-	  "ubuntu-x64  linux/amd64  build=ubuntu-x64,os=ubuntu-24.04,arch=x86_64" \
-	  "ubuntu-arm64 linux/arm64 build=ubuntu-arm64,os=ubuntu-24.04,arch=aarch64" ; do \
-	    name=$$(echo $$cfg | awk '{print $$1}'); \
-	    arch=$$(echo $$cfg | awk '{print $$2}'); \
-	    matrix=$$(echo $$cfg | awk '{print $$3}'); \
-	    echo "▶ $$name"; \
-	    act -W .github/workflows/release.yml \
-	        -j build \
-	        --matrix $$matrix \
-	        --bind \
-	        -P ubuntu-24.04=$$IMG \
-	        --container-architecture=$$arch \
-	        --pull ; \
-	done
 
 
 darwin-arm64:
@@ -341,7 +327,10 @@ windows: windows-x64
 	@echo -e "\nWindows Checksums:"
 	@cat target/release/CHECKSUMS-windows.txt
 
-linux: linux-x64 linux-arm64
+linux:
+	$(MAKE) linux-$(ARCH)
+
+linux-all: linux-x64 linux-arm64
 	@echo "# Linux builds:" > target/release/CHECKSUMS-linux.txt
 	@echo -e "\n# x86_64-linux build:" >> target/release/CHECKSUMS-linux.txt
 	@cat target/release/CHECKSUM-linux-x64.txt >> target/release/CHECKSUMS-linux.txt
@@ -352,7 +341,10 @@ linux: linux-x64 linux-arm64
 	@echo -e "\nLinux Checksums:"
 	@cat target/release/CHECKSUMS-linux.txt
 
-darwin: darwin-arm64 darwin-x64
+darwin:
+	$(MAKE) darwin-$(ARCH)
+
+darwin-all: darwin-arm64 darwin-x64
 	@echo "# darwin builds:" > target/release/CHECKSUMS-darwin.txt
 	@echo -e "\n# arm64-darwin build:" >> target/release/CHECKSUMS-darwin.txt
 	@cat target/release/CHECKSUM-darwin-arm64.txt >> target/release/CHECKSUMS-darwin.txt
@@ -411,13 +403,12 @@ tests:
 	@echo "🔍 checking for cargo-nextest …"
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 	    echo "✅ cargo-nextest already present"; \
-	    echo "▶ running tests with nextest …"; \
-	    cargo nextest run; \
 	else \
-	    echo "📦 falling back to cargo test …"; \
-	    cargo test --workspace --all-targets; \
+	    echo "📦 installing cargo-nextest …"; \
+	    cargo install --locked cargo-nextest || { \
+	        echo "⚠️  install failed – falling back to cargo test"; \
+	        cargo test --workspace --all-targets; exit $$?; }; \
 	fi
-
 
 clean:
 	@echo "Cleaning build artifacts..."
